@@ -29,6 +29,13 @@ app.get("/set-cookie", (req, res) => {
 });
 
 // Routes
+app.get('/', (req, res) => {
+  res.json({
+    message: 'Event management API is running',
+    description: 'This is the backend API. Open the frontend application to use the website.'
+  });
+});
+
 app.use("/api", authRoutes);
 app.use("/api", serviceRoutes);
 app.use("/api", paymentRoutes);
