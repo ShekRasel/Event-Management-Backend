@@ -2,7 +2,7 @@ require("dotenv").config();
 // This environment's system DNS refuses MongoDB Atlas SRV lookups.
 // Preserve the project's working resolver configuration.
 const dns = require('node:dns');
-dns.setServers(['8.8.8.8', '8.8.4.4']);
+if (!process.env.VERCEL) dns.setServers(['8.8.8.8', '8.8.4.4']);
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
@@ -15,6 +15,20 @@ const contactRoute = require("./routes/contact");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+let connectionPromise;
+
+async function connectDatabase() {
+  for (const key of ['MONGODB_URI', 'JWT_SECRET']) {
+    if (!process.env[key]) throw new Error(`${key} is required`);
+  }
+  if (mongoose.connection.readyState === 1) return;
+  if (!connectionPromise) {
+    connectionPromise = mongoose.connect(process.env.MONGODB_URI, {
+      serverSelectionTimeoutMS: 10000
+    }).finally(() => { connectionPromise = undefined; });
+  }
+  await connectionPromise;
+}
 
 // Middleware
 app.use(express.json());
@@ -36,6 +50,18 @@ app.get('/', (req, res) => {
   });
 });
 
+// Serverless imports do not execute start(); connect before database-backed routes.
+app.use('/api', async (req, res, next) => {
+  if (!process.env.VERCEL) return next();
+  try {
+    await connectDatabase();
+    return next();
+  } catch (err) {
+    console.error('Database initialization failed:', err.name, err.code || '');
+    return res.status(503).json({ message: 'Database unavailable. Check server configuration.' });
+  }
+});
+
 app.use("/api", authRoutes);
 app.use("/api", serviceRoutes);
 app.use("/api", paymentRoutes);
@@ -49,15 +75,12 @@ app.use((err, req, res, next) => {
 });
 
 async function start() {
-  for (const key of ['MONGODB_URI', 'JWT_SECRET']) {
-    if (!process.env[key]) throw new Error(`${key} is required`);
-  }
-  await mongoose.connect(process.env.MONGODB_URI);
+  await connectDatabase();
   console.log('Connected to MongoDB');
   return app.listen(PORT, () => console.log(`Server is running on port ${PORT}`));
 }
 
-if (require.main === module) {
+if (require.main === module && !process.env.VERCEL) {
   start().catch((err) => {
     const missing = ['MONGODB_URI', 'JWT_SECRET'].filter(key => !process.env[key]);
     if (missing.length) {
@@ -70,4 +93,7 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app, start };
+// Vercel requires the Express request handler as the CommonJS default export.
+module.exports = app;
+module.exports.app = app;
+module.exports.start = start;
