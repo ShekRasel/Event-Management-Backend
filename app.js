@@ -1,4 +1,8 @@
 require("dotenv").config();
+// This environment's system DNS refuses MongoDB Atlas SRV lookups.
+// Preserve the project's working resolver configuration.
+const dns = require('node:dns');
+dns.setServers(['8.8.8.8', '8.8.4.4']);
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
@@ -47,8 +51,14 @@ async function start() {
 }
 
 if (require.main === module) {
-  start().catch(() => {
-    console.error('Startup failed. Check MongoDB connectivity and required environment variables.');
+  start().catch((err) => {
+    const missing = ['MONGODB_URI', 'JWT_SECRET'].filter(key => !process.env[key]);
+    if (missing.length) {
+      console.error(`Startup failed: missing ${missing.join(', ')}.`);
+    } else {
+      // Report diagnostic codes without logging connection strings or credentials.
+      console.error(`Startup failed (${err.name || 'Error'}${err.code ? `: ${err.code}` : ''}${err.syscall ? `, ${err.syscall}` : ''}). Check MongoDB connectivity and configuration.`);
+    }
     process.exitCode = 1;
   });
 }
