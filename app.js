@@ -17,9 +17,63 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 let connectionPromise;
 
+function configurationError(variable) {
+  const error = new Error(`${variable} is required`);
+  error.code = 'MISSING_ENVIRONMENT_VARIABLE';
+  error.variable = variable;
+  return error;
+}
+
+function databaseErrorDetails(error) {
+  const missing = ['MONGODB_URI', 'JWT_SECRET'].filter(key => !process.env[key]);
+  if (missing.length) {
+    return {
+      reason: 'missing_environment_variables',
+      missing,
+      action: 'Add the missing variables to the Vercel Production environment, then redeploy.'
+    };
+  }
+
+  const errors = [error, error && error.cause];
+  if (error && error.reason && error.reason.servers) {
+    for (const server of error.reason.servers.values()) errors.push(server.error);
+  }
+  const codes = errors.filter(Boolean).map(item => item.code);
+  const messages = errors.filter(Boolean).map(item => item.message || '').join(' ');
+
+  if (codes.includes(18) || codes.includes(8000) || /authentication failed|bad auth/i.test(messages)) {
+    return {
+      reason: 'mongodb_authentication_failed',
+      action: 'Check the MongoDB database username and password in MONGODB_URI.'
+    };
+  }
+  if (/querySrv|queryTxt|ENOTFOUND|ECONNREFUSED/i.test(messages)) {
+    return {
+      reason: 'mongodb_dns_failed',
+      action: 'Check the cluster hostname in MONGODB_URI and Vercel DNS connectivity.'
+    };
+  }
+  if (error && error.name === 'MongoParseError') {
+    return {
+      reason: 'invalid_mongodb_uri',
+      action: 'Copy a fresh Node.js connection string from MongoDB Atlas.'
+    };
+  }
+  if (error && error.name === 'MongooseServerSelectionError') {
+    return {
+      reason: 'mongodb_server_unreachable',
+      action: 'Allow deployment traffic in MongoDB Atlas Network Access and verify the cluster is running.'
+    };
+  }
+  return {
+    reason: 'mongodb_connection_failed',
+    action: 'Open the Vercel runtime log for the Database initialization failed entry.'
+  };
+}
+
 async function connectDatabase() {
   for (const key of ['MONGODB_URI', 'JWT_SECRET']) {
-    if (!process.env[key]) throw new Error(`${key} is required`);
+    if (!process.env[key]) throw configurationError(key);
   }
   if (mongoose.connection.readyState === 1) return;
   if (!connectionPromise) {
@@ -57,8 +111,18 @@ app.use('/api', async (req, res, next) => {
     await connectDatabase();
     return next();
   } catch (err) {
-    console.error('Database initialization failed:', err.name, err.code || '');
-    return res.status(503).json({ message: 'Database unavailable. Check server configuration.' });
+    const details = databaseErrorDetails(err);
+    console.error('Database initialization failed:', {
+      ...details,
+      name: err.name,
+      code: err.code,
+      syscall: err.syscall,
+      causeCode: err.cause && err.cause.code
+    });
+    return res.status(503).json({
+      message: 'Database unavailable. Check server configuration.',
+      ...details
+    });
   }
 });
 

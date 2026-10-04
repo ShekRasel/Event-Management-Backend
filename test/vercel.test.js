@@ -17,7 +17,14 @@ test('Vercel receives a callable handler and root works without database credent
   delete process.env.MONGODB_URI;
   t.after(() => { if (uri !== undefined) process.env.MONGODB_URI = uri; });
   assert.equal((await fetch(base)).status, 200);
-  assert.equal((await fetch(`${base}/api/services`)).status, 503);
+  const response = await fetch(`${base}/api/services`);
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), {
+    message: 'Database unavailable. Check server configuration.',
+    reason: 'missing_environment_variables',
+    missing: ['MONGODB_URI'],
+    action: 'Add the missing variables to the Vercel Production environment, then redeploy.'
+  });
 });
 test('serverless requests share a connection attempt and retry after failure', async t => {
   process.env.MONGODB_URI = 'mongodb://example.invalid/test';
